@@ -1,0 +1,61 @@
+plugins {
+    id 'java'
+    // Shades ASM and relocates it away from the ASM shipped by Forge/launchwrapper.
+    id 'com.gradleup.shadow' version '8.3.6'
+}
+
+group = 'github.naivg'
+version = '0.1.0'
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    implementation 'org.ow2.asm:asm:9.9'
+
+    testImplementation 'org.junit.jupiter:junit-jupiter:5.10.2'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+
+// The agent must load in every supported client JVM, so target Java 8 bytecode.
+tasks.withType(JavaCompile).configureEach {
+    options.release = 8
+    options.encoding = 'UTF-8'
+}
+
+tasks.named('test') {
+    useJUnitPlatform()
+}
+
+shadowJar {
+    archiveBaseName = 'offlineskininjector'
+    archiveClassifier = ''
+    archiveVersion = ''
+
+    relocate 'org.objectweb.asm', 'github.naivg.offlineskininjector.internal.asm'
+
+    manifest {
+        attributes(
+                'Implementation-Title': 'OfflineSkinInjector',
+                'Implementation-Version': project.version,
+                'Implementation-Timestamp': new Date().format("yyyy-MM-dd'T'HH:mm:ssZ"),
+                'Implementation-Vendor': 'NaivG',
+                'Premain-Class': 'github.naivg.offlineskininjector.Premain',
+                'Agent-Class': 'github.naivg.offlineskininjector.Premain',
+                'Can-Redefine-Classes': 'false',
+                'Can-Retransform-Classes': 'false',
+        )
+    }
+}
+
+processResources {
+	from('../LICENSE') {
+        rename('LICENSE', 'OFI_LICENSE.txt')
+		into 'META-INF/licenses'
+	}
+}
+
+tasks.named('build') {
+    dependsOn tasks.named('shadowJar')
+}
