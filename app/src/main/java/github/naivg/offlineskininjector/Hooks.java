@@ -29,6 +29,20 @@ public final class Hooks {
     private static volatile String localUuid;
     private static volatile String localName;
 
+    /**
+     * The runtime state is also published as system properties. Mod loaders append the agent
+     * jar to the system class path, so the game class loader (LaunchWrapper, Knot, ModLauncher)
+     * defines its own copy of this class from it. Static fields are per copy: the copy that
+     * {@link #init} touched is not the copy the patched authlib class calls. Properties are
+     * shared by the whole JVM, so every copy can rebuild the same state.
+     */
+    private static final String STATE_SKIN_URL = "offlineskininjector.runtime.skinUrl";
+    private static final String STATE_CAPE_URL = "offlineskininjector.runtime.capeUrl";
+    private static final String STATE_MODEL = "offlineskininjector.runtime.model";
+    private static final String STATE_MODE = "offlineskininjector.runtime.mode";
+    private static final String STATE_UUID = "offlineskininjector.runtime.uuid";
+    private static final String STATE_NAME = "offlineskininjector.runtime.name";
+
     /** Cached per class loader: the legacy texture map and the packed property. */
     private static final Map<ClassLoader, Map> LEGACY_CACHE = new ConcurrentHashMap<ClassLoader, Map>();
     private static final Map<ClassLoader, Object> PACKED_CACHE = new ConcurrentHashMap<ClassLoader, Object>();
@@ -48,12 +62,63 @@ public final class Hooks {
         overrideAll = config.mode() == Config.Mode.ALL;
         localUuid = config.uuid();
         localName = config.name();
+
+        System.setProperty(STATE_SKIN_URL, textures.skinUrl());
+        setOrClear(STATE_CAPE_URL, textures.capeUrl());
+        System.setProperty(STATE_MODEL, textures.model());
+        System.setProperty(STATE_MODE, overrideAll ? "all" : "self");
+        setOrClear(STATE_UUID, localUuid);
+        setOrClear(STATE_NAME, localName);
     }
 
     /** The URL the skin is downloaded from, or {@code null} when nothing is installed. */
     public static String skinUrl() {
-        TextureSet current = textures;
+        TextureSet current = currentTextures();
         return current == null ? null : current.skinUrl();
+    }
+
+    /** Returns this copy's textures, rebuilding them from the shared properties if needed. */
+    private static TextureSet currentTextures() {
+        TextureSet current = textures;
+        if (current != null) {
+            return current;
+        }
+        String skin = System.getProperty(STATE_SKIN_URL);
+        if (skin == null || skin.isEmpty()) {
+            return null;
+        }
+        TextureSet restored = new TextureSet(skin, emptyToNull(System.getProperty(STATE_CAPE_URL)),
+                System.getProperty(STATE_MODEL));
+        textures = restored;
+        if (Boolean.getBoolean("offlineskininjector.debug")) {
+            System.out.println("[OfflineSkinInjector] hook copy restored state ("
+                    + Hooks.class.getClassLoader() + ")");
+        }
+        return restored;
+    }
+
+    private static boolean sharedOverrideAll() {
+        return overrideAll || "all".equals(System.getProperty(STATE_MODE));
+    }
+
+    private static String sharedUuid() {
+        return localUuid != null ? localUuid : System.getProperty(STATE_UUID);
+    }
+
+    private static String sharedName() {
+        return localName != null ? localName : System.getProperty(STATE_NAME);
+    }
+
+    private static void setOrClear(String key, String value) {
+        if (value == null || value.isEmpty()) {
+            System.clearProperty(key);
+        } else {
+            System.setProperty(key, value);
+        }
+    }
+
+    private static String emptyToNull(String value) {
+        return value == null || value.isEmpty() ? null : value;
     }
 
     // ------------------------------------------------------------------ getTextures
@@ -67,16 +132,18 @@ public final class Hooks {
             if (profile == null || skinUrl() == null) {
                 return false;
             }
-            if (overrideAll) {
+            if (sharedOverrideAll()) {
                 return true;
             }
-            if (localUuid != null) {
+            String uuid = sharedUuid();
+            if (uuid != null) {
                 String id = profileUuid(profile);
-                return id != null && id.equals(localUuid);
+                return id != null && id.equals(uuid);
             }
-            if (localName != null) {
-                String name = profileName(profile);
-                return name != null && name.equalsIgnoreCase(localName);
+            String name = sharedName();
+            if (name != null) {
+                String actual = profileName(profile);
+                return actual != null && actual.equalsIgnoreCase(name);
             }
             // Neither UUID nor name could be determined: do not guess.
             return false;
@@ -92,7 +159,7 @@ public final class Hooks {
      */
     public static Map legacyTextures(Object profile) {
         try {
-            TextureSet current = textures;
+            TextureSet current = currentTextures();
             if (profile == null || current == null || current.skinUrl() == null) {
                 return Collections.emptyMap();
             }
@@ -138,7 +205,7 @@ public final class Hooks {
      */
     public static Object packedTextures(Object profile) {
         try {
-            TextureSet current = textures;
+            TextureSet current = currentTextures();
             if (profile == null || current == null || current.skinUrl() == null) {
                 return null;
             }
@@ -160,7 +227,7 @@ public final class Hooks {
     /** Whether the given property is the one we produced. */
     public static boolean isOurProperty(Object property) {
         try {
-            TextureSet current = textures;
+            TextureSet current = currentTextures();
             if (property == null || current == null) {
                 return false;
             }
@@ -180,7 +247,7 @@ public final class Hooks {
      */
     public static Object ourTextures(Object property) {
         try {
-            TextureSet current = textures;
+            TextureSet current = currentTextures();
             if (current == null || !isOurProperty(property)) {
                 return null;
             }
